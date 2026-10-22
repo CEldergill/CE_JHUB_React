@@ -131,6 +131,13 @@ export const REGION_TO_FORCES: Record<string, string[]> = {
   Ireland: [],
 }
 
+export function getRegionsForForce(forceId: string): string[] {
+  if (!forceId) return []
+  return Object.entries(REGION_TO_FORCES)
+    .filter(([, forceIds]) => forceIds.includes(forceId))
+    .map(([region]) => region)
+}
+
 export function stripHtml(html: string | null | undefined): string {
   if (!html) return ''
   return html

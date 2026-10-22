@@ -40,6 +40,7 @@ import {
 } from '../api'
 import {
   REGION_TO_FORCES,
+  getRegionsForForce,
   stripHtml,
   type CrimeCategory,
   type ForceOfficer,
@@ -70,6 +71,7 @@ export function MapPage() {
   const [selectedCategory, setSelectedCategory] = useState<string>('all-crime')
   const [streetSearch, setStreetSearch] = useState<string>('')
   const [isCoolingDown, setIsCoolingDown] = useState(false)
+  const [mapSyncKey, setMapSyncKey] = useState<number>(0)
   const lastSelectionTimestamp = useRef<number>(0)
 
   // Force-level API state
@@ -96,12 +98,25 @@ export function MapPage() {
     }, SELECTION_COOLDOWN_MS)
   }
 
-  const selectForce = (forceId: string) => {
-    if (!forceId || forceId === selectedForceId) return
+  const selectForce = (forceId: string, explicitRegion?: string) => {
+    if (!forceId) return
+    if (forceId === selectedForceId) {
+      if (explicitRegion) setSelectedRegion(explicitRegion)
+      return
+    }
     if (Date.now() - lastSelectionTimestamp.current < SELECTION_COOLDOWN_MS) {
       return
     }
     triggerCooldown()
+    if (explicitRegion) {
+      setSelectedRegion(explicitRegion)
+    } else {
+      const matchingRegions = getRegionsForForce(forceId)
+      if (matchingRegions.length > 0) {
+        setSelectedRegion(matchingRegions.join(', '))
+      }
+      setMapSyncKey((k) => k + 1)
+    }
     setForceLoading(true)
     setSelectedNeighbourhoodId('')
     setNeighbourhoods([])
@@ -124,7 +139,7 @@ export function MapPage() {
     setSelectedNeighbourhoodId(hoodId)
   }
 
-  // 1. Initial load: forces, available months, crime categories
+  // Initial load: forces, available months, crime categories
   useEffect(() => {
     let cancelled = false
 
@@ -296,15 +311,38 @@ export function MapPage() {
   ])
 
   const handleRegionSelect = (region: string | null) => {
-    setSelectedRegion(region)
+    // Ignore null deselection from clicking the already-active region
     if (!region) return
     const mappedForces = REGION_TO_FORCES[region]
     if (mappedForces && mappedForces.length > 0) {
-      selectForce(mappedForces[0])
+      selectForce(mappedForces[0], region)
+    } else {
+      setSelectedRegion(region)
     }
   }
 
-  const regionForceIds = selectedRegion ? (REGION_TO_FORCES[selectedRegion] ?? []) : []
+  const highlightedRegions = useMemo(() => {
+    if (selectedRegion && REGION_TO_FORCES[selectedRegion]) {
+      return [selectedRegion]
+    }
+    return getRegionsForForce(selectedForceId)
+  }, [selectedRegion, selectedForceId])
+
+  const cityColors = useMemo(() => {
+    const colors: Record<string, string> = {}
+    for (const region of highlightedRegions) {
+      colors[region] = '#fafafa'
+    }
+    return colors
+  }, [highlightedRegions])
+
+  const primaryRegionKey =
+    selectedRegion && REGION_TO_FORCES[selectedRegion]
+      ? selectedRegion
+      : (highlightedRegions[0] ?? null)
+  const regionForceIds = primaryRegionKey
+    ? (REGION_TO_FORCES[primaryRegionKey] ?? [])
+    : []
   const isUnsupportedRegion =
     selectedRegion === 'Scotland' || selectedRegion === 'Ireland'
 
@@ -377,6 +415,7 @@ export function MapPage() {
             <CardContent className="flex flex-col items-center pt-4">
               <div className="w-full overflow-hidden flex justify-center">
                 <Unitedkingdom
+                  key={mapSyncKey}
                   type="select-single"
                   size={360}
                   mapColor="#27272a"
@@ -384,6 +423,7 @@ export function MapPage() {
                   strokeWidth={0.8}
                   hoverColor="#a1a1aa"
                   selectColor="#fafafa"
+                  cityColors={cityColors}
                   hints={true}
                   hintTextColor="#fafafa"
                   hintBackgroundColor="#09090b"
