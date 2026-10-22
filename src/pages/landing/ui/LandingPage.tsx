@@ -1,65 +1,89 @@
-import { useState } from 'react'
-import Unitedkingdom from '@react-map/united-kingdom'
+import { ArrowRight, MapPin, ShieldCheck, Activity } from 'lucide-react'
+import {
+  Badge,
+  Button,
+  Card,
+  CardDescription,
+  CardFooter,
+  CardHeader,
+  CardTitle,
+  Separator,
+} from '@shared/components'
 
-export function LandingPage() {
-  const [selectedRegion, setSelectedRegion] = useState<string | null>(null)
+interface LandingPageProps {
+  onOpenMap: () => void
+}
 
+export function LandingPage({ onOpenMap }: LandingPageProps) {
   return (
     <main
       id="landing-page"
-      style={{
-        minHeight: '100vh',
-        backgroundColor: '#0f172a',
-        color: '#f8fafc',
-        fontFamily: 'system-ui, -apple-system, sans-serif',
-        display: 'flex',
-        flexDirection: 'column',
-        alignItems: 'center',
-        padding: '2rem',
-        boxSizing: 'border-box',
-      }}
+      className="mx-auto flex min-h-[calc(100vh-3.5rem)] max-w-5xl flex-col justify-center gap-6 px-4 py-10 sm:px-6"
     >
-      <header style={{ textAlign: 'center', marginBottom: '1.5rem' }}>
-        <h1 style={{ margin: '0 0 0.5rem', fontSize: '1.875rem', fontWeight: 700 }}>
-          UK Interactive Map
-        </h1>
-        <p style={{ margin: 0, color: '#94a3b8', fontSize: '1rem' }}>
-          {selectedRegion ? (
-            <>
-              Selected region: <strong style={{ color: '#38bdf8' }}>{selectedRegion}</strong>
-            </>
-          ) : (
-            'Click a county or region on the map to select it'
-          )}
-        </p>
-      </header>
+      <Card>
+        <CardHeader className="gap-2">
+          <Badge variant="secondary" className="mb-1">
+            England, Wales &amp; Northern Ireland
+          </Badge>
+          <CardTitle className="text-3xl font-bold tracking-tight sm:text-4xl">
+            UK Crime Map
+          </CardTitle>
+          <CardDescription className="max-w-2xl text-base leading-relaxed">
+            Browse regional police forces, neighbourhood teams, and monthly street-level crime
+            reports across the UK using public data from{' '}
+            <code className="bg-muted text-foreground rounded px-1.5 py-0.5 font-mono text-xs">
+              data.police.uk
+            </code>
+            .
+          </CardDescription>
+        </CardHeader>
 
-      <section
-        style={{
-          backgroundColor: '#1e293b',
-          border: '1px solid #334155',
-          borderRadius: '12px',
-          padding: '1.5rem',
-          display: 'flex',
-          justifyContent: 'center',
-          alignItems: 'center',
-          boxShadow: '0 10px 25px -5px rgba(0, 0, 0, 0.4)',
-        }}
-      >
-        <Unitedkingdom
-          type="select-single"
-          size={520}
-          mapColor="#334155"
-          strokeColor="#0f172a"
-          strokeWidth={0.8}
-          hoverColor="#38bdf8"
-          selectColor="#0284c7"
-          hints={true}
-          hintTextColor="#f8fafc"
-          hintBackgroundColor="#0f172a"
-          onSelect={(state) => setSelectedRegion(state)}
-        />
-      </section>
+        <Separator />
+
+        <CardFooter className="flex items-center justify-between pt-6">
+          <span className="text-xs text-muted-foreground">
+            Source: Police.uk Open Data
+          </span>
+          <Button onClick={onOpenMap}>
+            Open Map
+            <ArrowRight className="size-4" />
+          </Button>
+        </CardFooter>
+      </Card>
+
+      <div className="grid gap-4 sm:grid-cols-3">
+        <Card>
+          <CardHeader>
+            <MapPin className="size-4 text-muted-foreground mb-1" />
+            <CardTitle className="text-base">Regional Forces</CardTitle>
+            <CardDescription>
+              Select a county on the map to view the local police force, contact details, and
+              senior officers.
+            </CardDescription>
+          </CardHeader>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <ShieldCheck className="size-4 text-muted-foreground mb-1" />
+            <CardTitle className="text-base">Neighbourhoods</CardTitle>
+            <CardDescription>
+              Drill down into specific policing neighbourhoods to see local priorities and community
+              events.
+            </CardDescription>
+          </CardHeader>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <Activity className="size-4 text-muted-foreground mb-1" />
+            <CardTitle className="text-base">Street Crime</CardTitle>
+            <CardDescription>
+              Filter recorded offences and investigation outcomes by category and month.
+            </CardDescription>
+          </CardHeader>
+        </Card>
+      </div>
     </main>
   )
 }
