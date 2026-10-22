@@ -1,62 +1,755 @@
-import { useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import Unitedkingdom from '@react-map/united-kingdom'
-import { MapPin } from 'lucide-react'
 import {
+  MapPin,
+  Phone,
+  ExternalLink,
+  Search,
+  Loader2,
+  AlertCircle,
+  Shield,
+  Users,
+} from 'lucide-react'
+import {
+  Alert,
+  AlertDescription,
+  AlertTitle,
   Badge,
+  Button,
   Card,
   CardContent,
   CardDescription,
   CardHeader,
   CardTitle,
   Separator,
+  Tabs,
+  TabsContent,
+  TabsList,
+  TabsTrigger,
 } from '@shared/components'
+import {
+  getCrimeCategories,
+  getCrimeDates,
+  getForceDetails,
+  getForceOfficers,
+  getForces,
+  getNeighbourhoodDetails,
+  getNeighbourhoodPriorities,
+  getNeighbourhoods,
+  getStreetCrimes,
+} from '../api'
+import {
+  REGION_TO_FORCES,
+  stripHtml,
+  type CrimeCategory,
+  type ForceOfficer,
+  type NeighbourhoodDetails,
+  type NeighbourhoodPriority,
+  type NeighbourhoodSummary,
+  type PoliceForceDetails,
+  type PoliceForceSummary,
+  type StreetCrime,
+} from '../model'
 
 export function MapPage() {
-  const [selectedRegion, setSelectedRegion] = useState<string | null>(null)
+  // Initial reference data
+  const [forces, setForces] = useState<PoliceForceSummary[]>([])
+  const [availableDates, setAvailableDates] = useState<string[]>([])
+  const [categories, setCategories] = useState<CrimeCategory[]>([])
+  const [initialLoading, setInitialLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
+
+  // User selections
+  const [selectedRegion, setSelectedRegion] = useState<string | null>('Kent')
+  const [selectedForceId, setSelectedForceId] = useState<string>('kent')
+  const [selectedNeighbourhoodId, setSelectedNeighbourhoodId] = useState<string>('')
+  const [selectedDate, setSelectedDate] = useState<string>('')
+  const [selectedCategory, setSelectedCategory] = useState<string>('all-crime')
+  const [streetSearch, setStreetSearch] = useState<string>('')
+
+  // Force-level API state
+  const [forceDetails, setForceDetails] = useState<PoliceForceDetails | null>(null)
+  const [officers, setOfficers] = useState<ForceOfficer[]>([])
+  const [neighbourhoods, setNeighbourhoods] = useState<NeighbourhoodSummary[]>([])
+  const [forceLoading, setForceLoading] = useState(true)
+
+  // Neighbourhood-level API state
+  const [neighbourhoodDetails, setNeighbourhoodDetails] =
+    useState<NeighbourhoodDetails | null>(null)
+  const [priorities, setPriorities] = useState<NeighbourhoodPriority[]>([])
+  const [neighbourhoodLoading, setNeighbourhoodLoading] = useState(false)
+
+  // Street crimes API state
+  const [crimes, setCrimes] = useState<StreetCrime[]>([])
+  const [crimesLoading, setCrimesLoading] = useState(false)
+
+  const selectForce = (forceId: string) => {
+    if (!forceId || forceId === selectedForceId) return
+    setForceLoading(true)
+    setSelectedNeighbourhoodId('')
+    setNeighbourhoods([])
+    setNeighbourhoodDetails(null)
+    setPriorities([])
+    setCrimes([])
+    setSelectedForceId(forceId)
+  }
+
+  const selectNeighbourhood = (hoodId: string) => {
+    setNeighbourhoodLoading(true)
+    setSelectedNeighbourhoodId(hoodId)
+  }
+
+  // 1. Initial load: forces, available months, crime categories
+  useEffect(() => {
+    const controller = new AbortController()
+
+    Promise.all([
+      getForces(controller.signal),
+      getCrimeDates(controller.signal),
+      getCrimeCategories(undefined, controller.signal),
+    ])
+      .then(([forcesData, datesData, categoriesData]) => {
+        setForces(forcesData)
+        const monthList = datesData.map((d) => d.date).slice(0, 12)
+        setAvailableDates(monthList)
+        if (monthList[0]) {
+          setSelectedDate(monthList[0])
+        }
+        setCategories(categoriesData)
+        setError(null)
+      })
+      .catch((err: unknown) => {
+        if (err instanceof DOMException && err.name === 'AbortError') return
+        setError(err instanceof Error ? err.message : 'Failed to load initial API data')
+      })
+      .finally(() => {
+        setInitialLoading(false)
+      })
+
+    return () => controller.abort()
+  }, [])
+
+  // 2. When selectedForceId changes -> fetch force details, officers, and neighbourhoods
+  useEffect(() => {
+    if (!selectedForceId) return
+
+    const controller = new AbortController()
+
+    Promise.all([
+      getForceDetails(selectedForceId, controller.signal),
+      getForceOfficers(selectedForceId, controller.signal),
+      getNeighbourhoods(selectedForceId, controller.signal),
+    ])
+      .then(([details, people, hoodList]) => {
+        setForceDetails(details)
+        setOfficers(people)
+        setNeighbourhoods(hoodList)
+        const firstHood = hoodList[0]?.id ?? ''
+        setSelectedNeighbourhoodId(firstHood)
+        if (firstHood) {
+          setNeighbourhoodLoading(true)
+        }
+        setError(null)
+      })
+      .catch((err: unknown) => {
+        if (err instanceof DOMException && err.name === 'AbortError') return
+        setError(err instanceof Error ? err.message : 'Failed to load police force data')
+      })
+      .finally(() => {
+        setForceLoading(false)
+      })
+
+    return () => controller.abort()
+  }, [selectedForceId])
+
+  // 3. When selectedNeighbourhoodId changes -> fetch neighbourhood details (including lat/lng) & priorities
+  useEffect(() => {
+    if (!selectedForceId || !selectedNeighbourhoodId) return
+
+    const controller = new AbortController()
+
+    Promise.all([
+      getNeighbourhoodDetails(selectedForceId, selectedNeighbourhoodId, controller.signal),
+      getNeighbourhoodPriorities(
+        selectedForceId,
+        selectedNeighbourhoodId,
+        controller.signal,
+      ),
+    ])
+      .then(([details, priorityList]) => {
+        setNeighbourhoodDetails(details)
+        setPriorities(priorityList)
+        if (details?.centre?.latitude && details?.centre?.longitude) {
+          setCrimesLoading(true)
+        }
+      })
+      .catch((err: unknown) => {
+        if (err instanceof DOMException && err.name === 'AbortError') return
+        setError(
+          err instanceof Error ? err.message : 'Failed to load neighbourhood details',
+        )
+      })
+      .finally(() => {
+        setNeighbourhoodLoading(false)
+      })
+
+    return () => controller.abort()
+  }, [selectedForceId, selectedNeighbourhoodId])
+
+  // 4. When neighbourhood coordinates, category, or month change -> fetch street-level crimes
+  useEffect(() => {
+    const lat = neighbourhoodDetails?.centre?.latitude
+    const lng = neighbourhoodDetails?.centre?.longitude
+    if (!lat || !lng || initialLoading) return
+
+    const controller = new AbortController()
+
+    getStreetCrimes(
+      {
+        lat,
+        lng,
+        category: selectedCategory,
+        date: selectedDate || undefined,
+      },
+      controller.signal,
+    )
+      .then((crimeList) => {
+        setCrimes(crimeList)
+      })
+      .catch((err: unknown) => {
+        if (err instanceof DOMException && err.name === 'AbortError') return
+        setCrimes([])
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) {
+          setCrimesLoading(false)
+        }
+      })
+
+    return () => controller.abort()
+  }, [
+    initialLoading,
+    neighbourhoodDetails?.centre?.latitude,
+    neighbourhoodDetails?.centre?.longitude,
+    selectedCategory,
+    selectedDate,
+  ])
+
+  const handleRegionSelect = (region: string | null) => {
+    setSelectedRegion(region)
+    if (!region) return
+    const mappedForces = REGION_TO_FORCES[region]
+    if (mappedForces && mappedForces.length > 0) {
+      selectForce(mappedForces[0])
+    }
+  }
+
+  const regionForceIds = selectedRegion ? (REGION_TO_FORCES[selectedRegion] ?? []) : []
+  const isUnsupportedRegion =
+    selectedRegion === 'Scotland' || selectedRegion === 'Ireland'
+
+  const categoryNameMap = useMemo(() => {
+    const map: Record<string, string> = {}
+    for (const c of categories) {
+      map[c.url] = c.name
+    }
+    return map
+  }, [categories])
+
+  const filteredCrimes = useMemo(() => {
+    if (!streetSearch.trim()) return crimes
+    const q = streetSearch.toLowerCase()
+    return crimes.filter(
+      (c) =>
+        c.location.street.name.toLowerCase().includes(q) ||
+        (c.outcome_status?.category ?? 'Under investigation').toLowerCase().includes(q) ||
+        c.category.toLowerCase().includes(q),
+    )
+  }, [crimes, streetSearch])
+
+  const categoryBreakdown = useMemo(() => {
+    const counts: Record<string, number> = {}
+    for (const crime of filteredCrimes) {
+      counts[crime.category] = (counts[crime.category] ?? 0) + 1
+    }
+    return Object.entries(counts)
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 6)
+  }, [filteredCrimes])
 
   return (
     <main
       id="map-page"
-      className="mx-auto flex min-h-[calc(100vh-3.5rem)] max-w-6xl flex-col items-center px-4 py-8 sm:px-6"
+      className="mx-auto flex min-h-[calc(100vh-3.5rem)] max-w-6xl flex-col gap-6 px-4 py-6 sm:px-6"
     >
-      <Card className="w-full max-w-3xl">
-        <CardHeader className="flex flex-row items-center justify-between">
-          <div>
-            <CardTitle className="text-lg">UK Interactive Map</CardTitle>
-            <CardDescription className="mt-1">
-              Click a county or region on the map to select it
-            </CardDescription>
-          </div>
-          {selectedRegion ? (
-            <Badge variant="default" className="gap-1.5 px-3 py-1 text-xs">
-              <MapPin className="size-3.5" />
-              {selectedRegion}
-            </Badge>
-          ) : (
-            <Badge variant="outline" className="px-3 py-1 text-xs text-muted-foreground">
-              No region selected
-            </Badge>
-          )}
-        </CardHeader>
+      {error && (
+        <Alert variant="destructive">
+          <AlertCircle className="size-4" />
+          <AlertTitle>Error communicating with Police.uk API</AlertTitle>
+          <AlertDescription>{error}</AlertDescription>
+        </Alert>
+      )}
 
-        <Separator />
+      <div className="grid gap-6 lg:grid-cols-12">
+        {/* Left Column: Interactive Map & Filters */}
+        <div className="flex flex-col gap-6 lg:col-span-5">
+          <Card>
+            <CardHeader className="flex flex-row items-center justify-between pb-3">
+              <div>
+                <CardTitle className="text-base">UK Region Map</CardTitle>
+                <CardDescription className="mt-0.5 text-xs">
+                  Click a county to load its police force
+                </CardDescription>
+              </div>
+              {selectedRegion && (
+                <Badge variant="secondary" className="gap-1">
+                  <MapPin className="size-3" />
+                  {selectedRegion}
+                </Badge>
+              )}
+            </CardHeader>
 
-        <CardContent className="flex justify-center pt-6">
-          <Unitedkingdom
-            type="select-single"
-            size={500}
-            mapColor="#27272a"
-            strokeColor="#52525b"
-            strokeWidth={0.8}
-            hoverColor="#a1a1aa"
-            selectColor="#fafafa"
-            hints={true}
-            hintTextColor="#fafafa"
-            hintBackgroundColor="#09090b"
-            onSelect={(state) => setSelectedRegion(state)}
-          />
-        </CardContent>
-      </Card>
+            <Separator />
+
+            <CardContent className="flex flex-col items-center pt-4">
+              <div className="w-full overflow-hidden flex justify-center">
+                <Unitedkingdom
+                  type="select-single"
+                  size={360}
+                  mapColor="#27272a"
+                  strokeColor="#52525b"
+                  strokeWidth={0.8}
+                  hoverColor="#a1a1aa"
+                  selectColor="#fafafa"
+                  hints={true}
+                  hintTextColor="#fafafa"
+                  hintBackgroundColor="#09090b"
+                  onSelect={handleRegionSelect}
+                />
+              </div>
+
+              {isUnsupportedRegion && (
+                <Alert className="mt-4">
+                  <AlertCircle className="size-4" />
+                  <AlertTitle>{selectedRegion} is outside Police.uk scope</AlertTitle>
+                  <AlertDescription>
+                    The data.police.uk API covers England, Wales, and Northern Ireland. Select
+                    another region or choose a force below.
+                  </AlertDescription>
+                </Alert>
+              )}
+
+              {regionForceIds.length > 1 && (
+                <div className="mt-3 flex w-full flex-col gap-1.5">
+                  <span className="text-xs text-muted-foreground">
+                    Forces in {selectedRegion}:
+                  </span>
+                  <div className="flex flex-wrap gap-1.5">
+                    {regionForceIds.map((id) => {
+                      const forceObj = forces.find((f) => f.id === id)
+                      return (
+                        <Button
+                          key={id}
+                          size="sm"
+                          variant={selectedForceId === id ? 'default' : 'outline'}
+                          onClick={() => selectForce(id)}
+                          className="h-7 text-xs"
+                        >
+                          {forceObj?.name ?? id}
+                        </Button>
+                      )
+                    })}
+                  </div>
+                </div>
+              )}
+            </CardContent>
+          </Card>
+
+          {/* Controls Card */}
+          <Card>
+            <CardHeader className="pb-3">
+              <CardTitle className="text-base">Query Controls</CardTitle>
+              <CardDescription className="text-xs">
+                Refine police force, neighbourhood, crime category, and month
+              </CardDescription>
+            </CardHeader>
+            <Separator />
+            <CardContent className="flex flex-col gap-4 pt-4">
+              <div className="flex flex-col gap-1.5">
+                <label htmlFor="force-select" className="text-xs font-medium">
+                  Police Force ({forces.length})
+                </label>
+                <select
+                  id="force-select"
+                  value={selectedForceId}
+                  onChange={(e) => selectForce(e.target.value)}
+                  disabled={initialLoading}
+                  className="bg-background border-input h-9 w-full rounded-md border px-3 text-sm outline-none focus:ring-2 focus:ring-ring"
+                >
+                  {forces.map((f) => (
+                    <option key={f.id} value={f.id}>
+                      {f.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div className="flex flex-col gap-1.5">
+                <label htmlFor="neighbourhood-select" className="text-xs font-medium">
+                  Neighbourhood ({neighbourhoods.length})
+                </label>
+                <select
+                  id="neighbourhood-select"
+                  value={selectedNeighbourhoodId}
+                  onChange={(e) => selectNeighbourhood(e.target.value)}
+                  disabled={forceLoading || neighbourhoods.length === 0}
+                  className="bg-background border-input h-9 w-full rounded-md border px-3 text-sm outline-none focus:ring-2 focus:ring-ring"
+                >
+                  {neighbourhoods.map((n) => (
+                    <option key={n.id} value={n.id}>
+                      {n.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div className="flex flex-col gap-1.5">
+                  <label htmlFor="category-select" className="text-xs font-medium">
+                    Crime Category
+                  </label>
+                  <select
+                    id="category-select"
+                    value={selectedCategory}
+                    onChange={(e) => {
+                      setCrimesLoading(true)
+                      setSelectedCategory(e.target.value)
+                    }}
+                    disabled={initialLoading}
+                    className="bg-background border-input h-9 w-full rounded-md border px-3 text-sm outline-none focus:ring-2 focus:ring-ring"
+                  >
+                    {categories.map((cat) => (
+                      <option key={cat.url} value={cat.url}>
+                        {cat.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div className="flex flex-col gap-1.5">
+                  <label htmlFor="date-select" className="text-xs font-medium">
+                    Reporting Month
+                  </label>
+                  <select
+                    id="date-select"
+                    value={selectedDate}
+                    onChange={(e) => {
+                      setCrimesLoading(true)
+                      setSelectedDate(e.target.value)
+                    }}
+                    disabled={initialLoading}
+                    className="bg-background border-input h-9 w-full rounded-md border px-3 text-sm outline-none focus:ring-2 focus:ring-ring"
+                  >
+                    {availableDates.map((d) => (
+                      <option key={d} value={d}>
+                        {d}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+        </div>
+
+        {/* Right Column: Live API Results */}
+        <div className="flex flex-col gap-6 lg:col-span-7">
+          {/* Force & Neighbourhood Summary Header */}
+          <Card>
+            <CardHeader className="pb-4">
+              <div className="flex flex-wrap items-start justify-between gap-2">
+                <div>
+                  <div className="flex items-center gap-2">
+                    <CardTitle className="text-xl">
+                      {forceLoading
+                        ? 'Loading force...'
+                        : (forceDetails?.name ?? 'Select a Police Force')}
+                    </CardTitle>
+                    {(forceLoading || neighbourhoodLoading || crimesLoading) && (
+                      <Loader2 className="size-4 animate-spin text-muted-foreground" />
+                    )}
+                  </div>
+                  <CardDescription className="mt-1">
+                    {neighbourhoodDetails
+                      ? `Neighbourhood: ${neighbourhoodDetails.name} (${neighbourhoodDetails.centre.latitude}, ${neighbourhoodDetails.centre.longitude})`
+                      : 'Loading neighbourhood coordinates...'}
+                  </CardDescription>
+                </div>
+
+                <div className="flex items-center gap-2">
+                  {forceDetails?.telephone && (
+                    <Badge variant="outline" className="gap-1">
+                      <Phone className="size-3" />
+                      {forceDetails.telephone}
+                    </Badge>
+                  )}
+                  {forceDetails?.url && (
+                    <a
+                      href={forceDetails.url}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="inline-flex items-center gap-1 rounded-md border px-2.5 py-0.5 text-xs font-medium hover:bg-accent"
+                    >
+                      Website
+                      <ExternalLink className="size-3" />
+                    </a>
+                  )}
+                </div>
+              </div>
+            </CardHeader>
+          </Card>
+
+          {/* Detailed Tabs */}
+          <Tabs defaultValue="crimes" className="w-full">
+            <TabsList>
+              <TabsTrigger value="crimes">
+                Street Crimes ({filteredCrimes.length})
+              </TabsTrigger>
+              <TabsTrigger value="neighbourhood">
+                Neighbourhood &amp; Priorities ({priorities.length})
+              </TabsTrigger>
+              <TabsTrigger value="force">
+                Force &amp; Officers ({officers.length})
+              </TabsTrigger>
+            </TabsList>
+
+            {/* Tab 1: Street Crimes */}
+            <TabsContent value="crimes" className="mt-4 flex flex-col gap-4">
+              <Card>
+                <CardHeader className="pb-3">
+                  <div className="flex flex-wrap items-center justify-between gap-3">
+                    <div>
+                      <CardTitle className="text-base">
+                        Recorded Street Incidents
+                      </CardTitle>
+                      <CardDescription className="text-xs">
+                        {selectedDate ? `Month: ${selectedDate}` : 'Latest month'} ·{' '}
+                        {categoryNameMap[selectedCategory] ?? selectedCategory}
+                      </CardDescription>
+                    </div>
+
+                    <div className="relative w-full sm:w-60">
+                      <Search className="text-muted-foreground absolute top-2.5 left-2.5 size-4" />
+                      <input
+                        type="text"
+                        placeholder="Filter by street or outcome..."
+                        value={streetSearch}
+                        onChange={(e) => setStreetSearch(e.target.value)}
+                        className="bg-background border-input h-9 w-full rounded-md border pr-3 pl-8 text-xs outline-none focus:ring-2 focus:ring-ring"
+                      />
+                    </div>
+                  </div>
+                </CardHeader>
+
+                <Separator />
+
+                <CardContent className="pt-4">
+                  {crimesLoading ? (
+                    <div className="flex items-center justify-center gap-2 py-12 text-sm text-muted-foreground">
+                      <Loader2 className="size-4 animate-spin" />
+                      Fetching street-level crimes from data.police.uk...
+                    </div>
+                  ) : filteredCrimes.length === 0 ? (
+                    <p className="py-8 text-center text-sm text-muted-foreground">
+                      No recorded incidents match the current filters.
+                    </p>
+                  ) : (
+                    <div className="flex flex-col gap-6">
+                      {/* Top Categories Breakdown */}
+                      {categoryBreakdown.length > 0 && (
+                        <div className="flex flex-col gap-2">
+                          <span className="text-xs font-medium text-muted-foreground">
+                            Top Offence Categories
+                          </span>
+                          <div className="grid gap-2 sm:grid-cols-2">
+                            {categoryBreakdown.map(([catSlug, count]) => {
+                              const pct = Math.round(
+                                (count / filteredCrimes.length) * 100,
+                              )
+                              return (
+                                <div
+                                  key={catSlug}
+                                  className="flex flex-col gap-1 rounded-lg border p-2.5"
+                                >
+                                  <div className="flex items-center justify-between text-xs">
+                                    <span className="font-medium truncate">
+                                      {categoryNameMap[catSlug] ?? catSlug}
+                                    </span>
+                                    <span className="text-muted-foreground">
+                                      {count} ({pct}%)
+                                    </span>
+                                  </div>
+                                  <div className="bg-secondary h-1.5 w-full overflow-hidden rounded-full">
+                                    <div
+                                      className="bg-primary h-full rounded-full"
+                                      style={{ width: `${pct}%` }}
+                                    />
+                                  </div>
+                                </div>
+                              )
+                            })}
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Incident List */}
+                      <div className="flex flex-col gap-2">
+                        <span className="text-xs font-medium text-muted-foreground">
+                          Showing {Math.min(filteredCrimes.length, 40)} of{' '}
+                          {filteredCrimes.length} incidents
+                        </span>
+                        <div className="max-h-96 overflow-y-auto pr-1 flex flex-col gap-2">
+                          {filteredCrimes.slice(0, 40).map((crime) => (
+                            <div
+                              key={crime.id}
+                              className="flex flex-wrap items-center justify-between gap-2 rounded-lg border p-3 text-xs"
+                            >
+                              <div className="flex flex-col gap-0.5">
+                                <span className="font-semibold">
+                                  {categoryNameMap[crime.category] ?? crime.category}
+                                </span>
+                                <span className="text-muted-foreground">
+                                  {crime.location.street.name}
+                                </span>
+                              </div>
+                              <Badge variant="secondary" className="text-[11px]">
+                                {crime.outcome_status?.category ??
+                                  'No outcome recorded'}
+                              </Badge>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
+            </TabsContent>
+
+            {/* Tab 2: Neighbourhood & Local Priorities */}
+            <TabsContent value="neighbourhood" className="mt-4">
+              <Card>
+                <CardHeader>
+                  <div className="flex items-center justify-between">
+                    <CardTitle className="text-base">
+                      {neighbourhoodDetails?.name ?? 'Neighbourhood Details'}
+                    </CardTitle>
+                    {neighbourhoodDetails?.population &&
+                      neighbourhoodDetails.population !== '0' && (
+                        <Badge variant="outline">
+                          Population: {neighbourhoodDetails.population}
+                        </Badge>
+                      )}
+                  </div>
+                  {neighbourhoodDetails?.description && (
+                    <CardDescription className="mt-1">
+                      {stripHtml(neighbourhoodDetails.description)}
+                    </CardDescription>
+                  )}
+                </CardHeader>
+
+                <Separator />
+
+                <CardContent className="flex flex-col gap-3 pt-4">
+                  <span className="text-xs font-medium text-muted-foreground">
+                    Local Policing Priorities
+                  </span>
+                  {neighbourhoodLoading ? (
+                    <div className="flex items-center gap-2 py-6 text-sm text-muted-foreground">
+                      <Loader2 className="size-4 animate-spin" />
+                      Loading priorities...
+                    </div>
+                  ) : priorities.length === 0 ? (
+                    <p className="py-4 text-sm text-muted-foreground">
+                      No published priorities for this neighbourhood.
+                    </p>
+                  ) : (
+                    priorities.slice(0, 6).map((p, idx) => (
+                      <div key={idx} className="rounded-lg border p-3 text-xs space-y-1.5">
+                        <div className="flex items-center justify-between gap-2">
+                          <Badge variant="outline">Priority</Badge>
+                          {p['issue-date'] && (
+                            <span className="text-muted-foreground">
+                              {p['issue-date'].slice(0, 10)}
+                            </span>
+                          )}
+                        </div>
+                        <p className="font-medium leading-relaxed">
+                          {stripHtml(p.issue)}
+                        </p>
+                        {p.action && (
+                          <p className="text-muted-foreground leading-relaxed">
+                            Action: {stripHtml(p.action)}
+                          </p>
+                        )}
+                      </div>
+                    ))
+                  )}
+                </CardContent>
+              </Card>
+            </TabsContent>
+
+            {/* Tab 3: Force Details & Senior Officers */}
+            <TabsContent value="force" className="mt-4">
+              <Card>
+                <CardHeader>
+                  <div className="flex items-center gap-2">
+                    <Shield className="size-4 text-muted-foreground" />
+                    <CardTitle className="text-base">
+                      {forceDetails?.name ?? 'Force Overview'}
+                    </CardTitle>
+                  </div>
+                  <CardDescription className="mt-1 leading-relaxed">
+                    {stripHtml(forceDetails?.description) ||
+                      'Official force information and senior leadership from data.police.uk.'}
+                  </CardDescription>
+                </CardHeader>
+
+                <Separator />
+
+                <CardContent className="flex flex-col gap-4 pt-4">
+                  <div className="flex items-center gap-2 text-xs font-medium text-muted-foreground">
+                    <Users className="size-3.5" />
+                    <span>Senior Officers ({officers.length})</span>
+                  </div>
+
+                  {officers.length === 0 ? (
+                    <p className="text-sm text-muted-foreground">
+                      No senior officer biographies published by this force via the API.
+                    </p>
+                  ) : (
+                    <div className="grid gap-3 sm:grid-cols-2">
+                      {officers.map((officer, idx) => (
+                        <div key={idx} className="rounded-lg border p-3 text-xs space-y-1">
+                          <div className="font-semibold">{officer.name}</div>
+                          <Badge variant="secondary" className="text-[10px]">
+                            {officer.rank}
+                          </Badge>
+                          {officer.bio && (
+                            <p className="text-muted-foreground pt-1 line-clamp-3 leading-relaxed">
+                              {stripHtml(officer.bio)}
+                            </p>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
+            </TabsContent>
+          </Tabs>
+        </div>
+      </div>
     </main>
   )
 }

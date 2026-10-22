@@ -1,3 +1,4 @@
+import { useEffect, useState } from 'react'
 import { ArrowRight, MapPin, ShieldCheck, Activity } from 'lucide-react'
 import {
   Badge,
@@ -9,12 +10,26 @@ import {
   CardTitle,
   Separator,
 } from '@shared/components'
+import { getLandingOverviewStats } from '../api'
+import type { LandingOverviewStats } from '../model'
 
 interface LandingPageProps {
   onOpenMap: () => void
 }
 
 export function LandingPage({ onOpenMap }: LandingPageProps) {
+  const [stats, setStats] = useState<LandingOverviewStats | null>(null)
+
+  useEffect(() => {
+    const controller = new AbortController()
+    getLandingOverviewStats(controller.signal)
+      .then(setStats)
+      .catch(() => {
+        // Ignore abort or network error on initial overview badge
+      })
+    return () => controller.abort()
+  }, [])
+
   return (
     <main
       id="landing-page"
@@ -22,9 +37,15 @@ export function LandingPage({ onOpenMap }: LandingPageProps) {
     >
       <Card>
         <CardHeader className="gap-2">
-          <Badge variant="secondary" className="mb-1">
-            England, Wales &amp; Northern Ireland
-          </Badge>
+          <div className="flex flex-wrap items-center gap-2 mb-1">
+            <Badge variant="secondary">England, Wales &amp; Northern Ireland</Badge>
+            {stats && (
+              <Badge variant="outline">
+                {stats.totalForces} Police Forces
+                {stats.latestMonth ? ` · Latest data: ${stats.latestMonth}` : ''}
+              </Badge>
+            )}
+          </div>
           <CardTitle className="text-3xl font-bold tracking-tight sm:text-4xl">
             UK Crime Map
           </CardTitle>
