@@ -38,7 +38,7 @@ src/
 └── main.tsx              # Application entry point
 ```
 
-Import from the lowest layer that owns the code. Shared code must stay domain-agnostic, while page-specific code belongs in its page slice. Add `entities`, `features`, or `widgets` only when the application needs those layers.
+Import from the lowest layer that owns the code. Shared code must stay domain-agnostic, while page-specific code belongs in its page slice.
 
 ## Path Aliases
 
