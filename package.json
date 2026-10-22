@@ -1,5 +1,5 @@
 {
-  "name": "altius",
+  "name": "uk-crime-map",
   "private": true,
   "version": "0.0.0",
   "type": "module",
@@ -10,6 +10,7 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@react-map/united-kingdom": "^1.0.9",
     "react": "^19.3.1",
     "react-dom": "^19.3.1"
   },
