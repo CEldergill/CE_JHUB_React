@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import Unitedkingdom from '@react-map/united-kingdom'
 import {
   MapPin,
@@ -51,6 +51,8 @@ import {
   type StreetCrime,
 } from '../model'
 
+const SELECTION_COOLDOWN_MS = 600
+
 export function MapPage() {
   // Initial reference data
   const [forces, setForces] = useState<PoliceForceSummary[]>([])
@@ -60,12 +62,15 @@ export function MapPage() {
   const [error, setError] = useState<string | null>(null)
 
   // User selections
+  const [activeTab, setActiveTab] = useState<string>('crimes')
   const [selectedRegion, setSelectedRegion] = useState<string | null>('Kent')
   const [selectedForceId, setSelectedForceId] = useState<string>('kent')
   const [selectedNeighbourhoodId, setSelectedNeighbourhoodId] = useState<string>('')
   const [selectedDate, setSelectedDate] = useState<string>('')
   const [selectedCategory, setSelectedCategory] = useState<string>('all-crime')
   const [streetSearch, setStreetSearch] = useState<string>('')
+  const [isCoolingDown, setIsCoolingDown] = useState(false)
+  const lastSelectionTimestamp = useRef<number>(0)
 
   // Force-level API state
   const [forceDetails, setForceDetails] = useState<PoliceForceDetails | null>(null)
@@ -83,32 +88,49 @@ export function MapPage() {
   const [crimes, setCrimes] = useState<StreetCrime[]>([])
   const [crimesLoading, setCrimesLoading] = useState(false)
 
+  const triggerCooldown = () => {
+    lastSelectionTimestamp.current = Date.now()
+    setIsCoolingDown(true)
+    setTimeout(() => {
+      setIsCoolingDown(false)
+    }, SELECTION_COOLDOWN_MS)
+  }
+
   const selectForce = (forceId: string) => {
     if (!forceId || forceId === selectedForceId) return
+    if (Date.now() - lastSelectionTimestamp.current < SELECTION_COOLDOWN_MS) {
+      return
+    }
+    triggerCooldown()
     setForceLoading(true)
     setSelectedNeighbourhoodId('')
     setNeighbourhoods([])
     setNeighbourhoodDetails(null)
     setPriorities([])
+    setOfficers([])
     setCrimes([])
     setSelectedForceId(forceId)
   }
 
   const selectNeighbourhood = (hoodId: string) => {
+    if (!hoodId || hoodId === selectedNeighbourhoodId) return
+    if (Date.now() - lastSelectionTimestamp.current < SELECTION_COOLDOWN_MS) {
+      return
+    }
+    triggerCooldown()
     setNeighbourhoodLoading(true)
+    setPriorities([])
+    setCrimes([])
     setSelectedNeighbourhoodId(hoodId)
   }
 
   // 1. Initial load: forces, available months, crime categories
   useEffect(() => {
-    const controller = new AbortController()
+    let cancelled = false
 
-    Promise.all([
-      getForces(controller.signal),
-      getCrimeDates(controller.signal),
-      getCrimeCategories(undefined, controller.signal),
-    ])
+    Promise.all([getForces(), getCrimeDates(), getCrimeCategories()])
       .then(([forcesData, datesData, categoriesData]) => {
+        if (cancelled) return
         setForces(forcesData)
         const monthList = datesData.map((d) => d.date).slice(0, 12)
         setAvailableDates(monthList)
@@ -119,30 +141,31 @@ export function MapPage() {
         setError(null)
       })
       .catch((err: unknown) => {
-        if (err instanceof DOMException && err.name === 'AbortError') return
+        if (cancelled) return
         setError(err instanceof Error ? err.message : 'Failed to load initial API data')
       })
       .finally(() => {
-        setInitialLoading(false)
+        if (!cancelled) setInitialLoading(false)
       })
 
-    return () => controller.abort()
+    return () => {
+      cancelled = true
+    }
   }, [])
 
-  // 2. When selectedForceId changes -> fetch force details, officers, and neighbourhoods
+  // When selectedForceId changes -> fetch force details and neighbourhoods
   useEffect(() => {
-    if (!selectedForceId) return
+    if (!selectedForceId || initialLoading) return
 
-    const controller = new AbortController()
+    let cancelled = false
 
     Promise.all([
-      getForceDetails(selectedForceId, controller.signal),
-      getForceOfficers(selectedForceId, controller.signal),
-      getNeighbourhoods(selectedForceId, controller.signal),
+      getForceDetails(selectedForceId),
+      getNeighbourhoods(selectedForceId),
     ])
-      .then(([details, people, hoodList]) => {
+      .then(([details, hoodList]) => {
+        if (cancelled) return
         setForceDetails(details)
-        setOfficers(people)
         setNeighbourhoods(hoodList)
         const firstHood = hoodList[0]?.id ?? ''
         setSelectedNeighbourhoodId(firstHood)
@@ -152,81 +175,118 @@ export function MapPage() {
         setError(null)
       })
       .catch((err: unknown) => {
-        if (err instanceof DOMException && err.name === 'AbortError') return
+        if (cancelled) return
         setError(err instanceof Error ? err.message : 'Failed to load police force data')
       })
       .finally(() => {
-        setForceLoading(false)
+        if (!cancelled) setForceLoading(false)
       })
 
-    return () => controller.abort()
-  }, [selectedForceId])
+    return () => {
+      cancelled = true
+    }
+  }, [selectedForceId, initialLoading])
 
-  // 3. When selectedNeighbourhoodId changes -> fetch neighbourhood details (including lat/lng) & priorities
+  // Only fetch senior officers when the "Force & Officers" tab is opened
   useEffect(() => {
-    if (!selectedForceId || !selectedNeighbourhoodId) return
+    if (!selectedForceId || activeTab !== 'force') return
 
-    const controller = new AbortController()
+    let cancelled = false
+    getForceOfficers(selectedForceId)
+      .then((people) => {
+        if (!cancelled) setOfficers(people)
+      })
+      .catch(() => {
+        if (!cancelled) setOfficers([])
+      })
 
-    Promise.all([
-      getNeighbourhoodDetails(selectedForceId, selectedNeighbourhoodId, controller.signal),
-      getNeighbourhoodPriorities(
-        selectedForceId,
-        selectedNeighbourhoodId,
-        controller.signal,
-      ),
-    ])
-      .then(([details, priorityList]) => {
+    return () => {
+      cancelled = true
+    }
+  }, [selectedForceId, activeTab])
+
+  // When selectedNeighbourhoodId changes -> fetch neighbourhood details (including lat/lng)
+  useEffect(() => {
+    if (!selectedForceId || !selectedNeighbourhoodId || initialLoading) return
+
+    let cancelled = false
+
+    getNeighbourhoodDetails(selectedForceId, selectedNeighbourhoodId)
+      .then((details) => {
+        if (cancelled) return
         setNeighbourhoodDetails(details)
-        setPriorities(priorityList)
         if (details?.centre?.latitude && details?.centre?.longitude) {
           setCrimesLoading(true)
         }
       })
       .catch((err: unknown) => {
-        if (err instanceof DOMException && err.name === 'AbortError') return
+        if (cancelled) return
         setError(
           err instanceof Error ? err.message : 'Failed to load neighbourhood details',
         )
       })
       .finally(() => {
-        setNeighbourhoodLoading(false)
+        if (!cancelled) setNeighbourhoodLoading(false)
       })
 
-    return () => controller.abort()
-  }, [selectedForceId, selectedNeighbourhoodId])
+    return () => {
+      cancelled = true
+    }
+  }, [selectedForceId, selectedNeighbourhoodId, initialLoading])
 
-  // 4. When neighbourhood coordinates, category, or month change -> fetch street-level crimes
+  // Only fetch neighbourhood priorities when the "Neighbourhood & Priorities" tab is opened
+  useEffect(() => {
+    if (
+      !selectedForceId ||
+      !selectedNeighbourhoodId ||
+      activeTab !== 'neighbourhood'
+    ) {
+      return
+    }
+
+    let cancelled = false
+    getNeighbourhoodPriorities(selectedForceId, selectedNeighbourhoodId)
+      .then((priorityList) => {
+        if (!cancelled) setPriorities(priorityList)
+      })
+      .catch(() => {
+        if (!cancelled) setPriorities([])
+      })
+
+    return () => {
+      cancelled = true
+    }
+  }, [selectedForceId, selectedNeighbourhoodId, activeTab])
+
+  // Debounced street-level crime call after neighbourhood coordinates settle
   useEffect(() => {
     const lat = neighbourhoodDetails?.centre?.latitude
     const lng = neighbourhoodDetails?.centre?.longitude
     if (!lat || !lng || initialLoading) return
 
-    const controller = new AbortController()
-
-    getStreetCrimes(
-      {
+    let cancelled = false
+    const debounceTimer = setTimeout(() => {
+      getStreetCrimes({
         lat,
         lng,
         category: selectedCategory,
         date: selectedDate || undefined,
-      },
-      controller.signal,
-    )
-      .then((crimeList) => {
-        setCrimes(crimeList)
       })
-      .catch((err: unknown) => {
-        if (err instanceof DOMException && err.name === 'AbortError') return
-        setCrimes([])
-      })
-      .finally(() => {
-        if (!controller.signal.aborted) {
-          setCrimesLoading(false)
-        }
-      })
+        .then((crimeList) => {
+          if (!cancelled) setCrimes(crimeList)
+        })
+        .catch(() => {
+          if (!cancelled) setCrimes([])
+        })
+        .finally(() => {
+          if (!cancelled) setCrimesLoading(false)
+        })
+    }, 300)
 
-    return () => controller.abort()
+    return () => {
+      cancelled = true
+      clearTimeout(debounceTimer)
+    }
   }, [
     initialLoading,
     neighbourhoodDetails?.centre?.latitude,
@@ -277,6 +337,9 @@ export function MapPage() {
       .slice(0, 6)
   }, [filteredCrimes])
 
+  const isBusy =
+    initialLoading || forceLoading || neighbourhoodLoading || crimesLoading || isCoolingDown
+
   return (
     <main
       id="map-page"
@@ -324,6 +387,7 @@ export function MapPage() {
                   hints={true}
                   hintTextColor="#fafafa"
                   hintBackgroundColor="#09090b"
+                  disableClick={isBusy}
                   onSelect={handleRegionSelect}
                 />
               </div>
@@ -351,6 +415,7 @@ export function MapPage() {
                         <Button
                           key={id}
                           size="sm"
+                          disabled={isBusy}
                           variant={selectedForceId === id ? 'default' : 'outline'}
                           onClick={() => selectForce(id)}
                           className="h-7 text-xs"
@@ -383,8 +448,8 @@ export function MapPage() {
                   id="force-select"
                   value={selectedForceId}
                   onChange={(e) => selectForce(e.target.value)}
-                  disabled={initialLoading}
-                  className="bg-background border-input h-9 w-full rounded-md border px-3 text-sm outline-none focus:ring-2 focus:ring-ring"
+                  disabled={isBusy}
+                  className="bg-background border-input h-9 w-full rounded-md border px-3 text-sm outline-none focus:ring-2 focus:ring-ring disabled:opacity-50"
                 >
                   {forces.map((f) => (
                     <option key={f.id} value={f.id}>
@@ -402,8 +467,8 @@ export function MapPage() {
                   id="neighbourhood-select"
                   value={selectedNeighbourhoodId}
                   onChange={(e) => selectNeighbourhood(e.target.value)}
-                  disabled={forceLoading || neighbourhoods.length === 0}
-                  className="bg-background border-input h-9 w-full rounded-md border px-3 text-sm outline-none focus:ring-2 focus:ring-ring"
+                  disabled={isBusy || neighbourhoods.length === 0}
+                  className="bg-background border-input h-9 w-full rounded-md border px-3 text-sm outline-none focus:ring-2 focus:ring-ring disabled:opacity-50"
                 >
                   {neighbourhoods.map((n) => (
                     <option key={n.id} value={n.id}>
@@ -422,11 +487,12 @@ export function MapPage() {
                     id="category-select"
                     value={selectedCategory}
                     onChange={(e) => {
+                      triggerCooldown()
                       setCrimesLoading(true)
                       setSelectedCategory(e.target.value)
                     }}
-                    disabled={initialLoading}
-                    className="bg-background border-input h-9 w-full rounded-md border px-3 text-sm outline-none focus:ring-2 focus:ring-ring"
+                    disabled={isBusy}
+                    className="bg-background border-input h-9 w-full rounded-md border px-3 text-sm outline-none focus:ring-2 focus:ring-ring disabled:opacity-50"
                   >
                     {categories.map((cat) => (
                       <option key={cat.url} value={cat.url}>
@@ -444,11 +510,12 @@ export function MapPage() {
                     id="date-select"
                     value={selectedDate}
                     onChange={(e) => {
+                      triggerCooldown()
                       setCrimesLoading(true)
                       setSelectedDate(e.target.value)
                     }}
-                    disabled={initialLoading}
-                    className="bg-background border-input h-9 w-full rounded-md border px-3 text-sm outline-none focus:ring-2 focus:ring-ring"
+                    disabled={isBusy}
+                    className="bg-background border-input h-9 w-full rounded-md border px-3 text-sm outline-none focus:ring-2 focus:ring-ring disabled:opacity-50"
                   >
                     {availableDates.map((d) => (
                       <option key={d} value={d}>
@@ -475,7 +542,7 @@ export function MapPage() {
                         ? 'Loading force...'
                         : (forceDetails?.name ?? 'Select a Police Force')}
                     </CardTitle>
-                    {(forceLoading || neighbourhoodLoading || crimesLoading) && (
+                    {isBusy && (
                       <Loader2 className="size-4 animate-spin text-muted-foreground" />
                     )}
                   </div>
@@ -510,16 +577,21 @@ export function MapPage() {
           </Card>
 
           {/* Detailed Tabs */}
-          <Tabs defaultValue="crimes" className="w-full">
+          <Tabs
+            defaultValue="crimes"
+            value={activeTab}
+            onValueChange={setActiveTab}
+            className="w-full"
+          >
             <TabsList>
               <TabsTrigger value="crimes">
                 Street Crimes ({filteredCrimes.length})
               </TabsTrigger>
               <TabsTrigger value="neighbourhood">
-                Neighbourhood &amp; Priorities ({priorities.length})
+                Neighbourhood &amp; Priorities
               </TabsTrigger>
               <TabsTrigger value="force">
-                Force &amp; Officers ({officers.length})
+                Force &amp; Officers
               </TabsTrigger>
             </TabsList>
 

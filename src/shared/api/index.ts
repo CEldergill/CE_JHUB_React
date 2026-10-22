@@ -1,12 +1,13 @@
 import { POLICE_API_BASE_URL } from '@shared/config'
 
 const CACHE_PREFIX = 'police_api_v1:'
-const MIN_REQUEST_INTERVAL_MS = 180
+// Enforce a 350ms cooldown gap AFTER each request completes before starting the next one
+const COOLDOWN_BETWEEN_REQUESTS_MS = 350
 
 const memoryCache = new Map<string, unknown>()
 const inFlightRequests = new Map<string, Promise<unknown>>()
 
-let lastRequestTime = 0
+let lastCompletedTime = 0
 let rateLimitQueue: Promise<void> = Promise.resolve()
 
 const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
@@ -40,12 +41,19 @@ function writeCached(url: string, data: unknown): void {
 function scheduleRateLimited<T>(task: () => Promise<T>): Promise<T> {
   const run = async (): Promise<T> => {
     const now = Date.now()
-    const waitMs = Math.max(0, lastRequestTime + MIN_REQUEST_INTERVAL_MS - now)
+    const waitMs = Math.max(
+      0,
+      lastCompletedTime + COOLDOWN_BETWEEN_REQUESTS_MS - now,
+    )
     if (waitMs > 0) {
       await delay(waitMs)
     }
-    lastRequestTime = Date.now()
-    return task()
+
+    try {
+      return await task()
+    } finally {
+      lastCompletedTime = Date.now()
+    }
   }
 
   const result = rateLimitQueue.then(run, run)
@@ -70,8 +78,8 @@ async function fetchWithRetry(url: string, attemptsLeft = 4): Promise<Response> 
     const retryAfterHeader = response.headers.get('Retry-After')
     const backoffMs = retryAfterHeader
       ? Number(retryAfterHeader) * 1000
-      : (5 - attemptsLeft) * 1200
-    await delay(Number.isFinite(backoffMs) && backoffMs > 0 ? backoffMs : 1200)
+      : (5 - attemptsLeft) * 1500
+    await delay(Number.isFinite(backoffMs) && backoffMs > 0 ? backoffMs : 1500)
     return fetchWithRetry(url, attemptsLeft - 1)
   }
 
