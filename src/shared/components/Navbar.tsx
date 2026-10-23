@@ -17,17 +17,20 @@ interface NavbarProps {
 }
 
 export function Navbar({ activePage, onNavigate }: NavbarProps) {
-  const navItems: { id: PageRoute; label: string; icon: typeof Home }[] = [
-    { id: 'landing', label: 'Overview', icon: Home },
-    { id: 'map', label: 'Interactive Map', icon: Map },
+  const navItems: { id: PageRoute; path: string; label: string; icon: typeof Home }[] = [
+    { id: 'landing', path: '/', label: 'Overview', icon: Home },
+    { id: 'map', path: '/map', label: 'Interactive Map', icon: Map },
   ]
 
   return (
     <header className="sticky top-0 z-50 w-full border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
       <div className="mx-auto flex h-14 max-w-6xl items-center justify-between px-4 sm:px-6">
-        <button
-          type="button"
-          onClick={() => onNavigate('landing')}
+        <a
+          href="/"
+          onClick={(e) => {
+            e.preventDefault()
+            onNavigate('landing')
+          }}
           className="flex items-center gap-2.5 text-left transition-opacity hover:opacity-80 cursor-pointer"
         >
           <div className="flex size-8 items-center justify-center rounded-md border bg-secondary text-foreground">
@@ -39,7 +42,7 @@ export function Navbar({ activePage, onNavigate }: NavbarProps) {
           <Badge variant="outline" className="hidden sm:inline-flex text-[10px]">
             data.police.uk
           </Badge>
-        </button>
+        </a>
 
         <NavigationMenu viewport={false}>
           <NavigationMenuList>
@@ -49,8 +52,12 @@ export function Navbar({ activePage, onNavigate }: NavbarProps) {
               return (
                 <NavigationMenuItem key={item.id}>
                   <NavigationMenuLink
+                    href={item.path}
                     active={isActive}
-                    onClick={() => onNavigate(item.id)}
+                    onClick={(e) => {
+                      e.preventDefault()
+                      onNavigate(item.id)
+                    }}
                     className={cn(
                       navigationMenuTriggerStyle(),
                       'flex-row items-center gap-2 h-8 px-3 text-xs',
